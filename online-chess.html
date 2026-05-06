@@ -1,0 +1,492 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Meeksozan Checkmate</title>
+    <!-- Tailwind CSS CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        brand: {
+                            dark: '#0f172a',
+                            panel: 'rgba(30, 41, 59, 0.7)',
+                            primary: '#c084fc',
+                            primaryHover: '#d8b4fe',
+                            accent: '#f472b6'
+                        }
+                    },
+                    fontFamily: { sans: ['Outfit', 'sans-serif'] },
+                    animation: { 'gradient-x': 'gradient-x 15s ease infinite' },
+                    keyframes: {
+                        'gradient-x': {
+                            '0%, 100%': { 'background-size': '200% 200%', 'background-position': 'left center' },
+                            '50%': { 'background-size': '200% 200%', 'background-position': 'right center' }
+                        }
+                    }
+                }
+            }
+        }
+    </script>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;700;800&display=swap" rel="stylesheet">
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    
+    <!-- Engine & Networking libraries -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/chess.js/0.10.3/chess.min.js"></script>
+    <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
+    <script src="https://unpkg.com/@phosphor-icons/web"></script>
+    
+    <style>
+        body, html {
+            margin: 0; padding: 0;
+            font-family: 'Outfit', sans-serif;
+            background: linear-gradient(-45deg, #1e1b4b, #312e81, #4c1d95, #701a75);
+            background-size: 400% 400%;
+            animation: gradient-x 15s ease infinite;
+            color: #f8fafc; min-height: 100vh;
+            cursor: none; overflow-x: hidden;
+        }
+
+        .cursor-dot {
+            font-size: 32px; color: #ffffff; text-shadow: 0 0 15px rgba(192,132,252,0.8);
+            position: fixed; top: 0; left: 0; pointer-events: none; z-index: 9999; transform: translate(-50%, -50%) scale(1);
+            transition: transform 0.2s cubic-bezier(0.175, 0.885, 0.32, 1.275), color 0.2s;
+            display: flex; align-items: center; justify-content: center;
+        }
+
+        a, button, input, .cursor-pointer { cursor: none !important; }
+
+        .glass-panel { background: rgba(10, 10, 30, 0.5); backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px); border: 1px solid rgba(255, 255, 255, 0.1); }
+        .fade-enter { animation: fadeIn 0.4s cubic-bezier(0.4, 0, 0.2, 1); }
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(20px); } to { opacity: 1; transform: translateY(0); } }
+        
+        .chess-piece { text-shadow: 0 4px 10px rgba(0,0,0,0.6); -webkit-font-smoothing: antialiased; }
+        .board-square-dark { background-color: rgba(0, 0, 0, 0.4); }
+        .board-square-light { background-color: rgba(255, 255, 255, 0.1); }
+    </style>
+</head>
+<body>
+    <div class="cursor-dot" id="cursor-dot">♚</div>
+
+    <div id="root"></div>
+
+    <script>
+        // Custom Cursor Logic
+        const dot = document.getElementById('cursor-dot');
+        window.addEventListener('mousemove', (e) => {
+            const posX = e.clientX; const posY = e.clientY;
+            dot.style.left = `${posX}px`; dot.style.top = `${posY}px`;
+        });
+        document.addEventListener('mouseover', (e) => {
+            if(['button','input'].includes(e.target.tagName.toLowerCase()) || e.target.closest('.cursor-pointer')) {
+                dot.style.transform = 'translate(-50%, -50%) scale(1.5)';
+                dot.style.color = '#f472b6';
+            }
+        });
+        document.addEventListener('mouseout', (e) => {
+            if(['button','input'].includes(e.target.tagName.toLowerCase()) || e.target.closest('.cursor-pointer')) {
+                dot.style.transform = 'translate(-50%, -50%) scale(1)';
+                dot.style.color = '#ffffff';
+            }
+        });
+    </script>
+
+    <script type="text/babel">
+        const { useState, useEffect, useRef } = React;
+
+        const OnlineChess = () => {
+            const [gameState, setGameState] = useState('setup'); // 'setup' | 'waiting' | 'playing' | 'gameover'
+            const [role, setRole] = useState(null); // 'white' | 'black'
+            
+            const [playerName, setPlayerName] = useState('');
+            const [opponentName, setOpponentName] = useState('Opponent');
+            const [inputRoomCode, setInputRoomCode] = useState('');
+            const [myCode, setMyCode] = useState('');
+            
+            const peerRef = useRef(null);
+            const connRef = useRef(null);
+            const chatEndRef = useRef(null);
+            
+            const [chatMessages, setChatMessages] = useState([]);
+            const [currentMessage, setCurrentMessage] = useState('');
+            
+            const gameRef = useRef(new window.Chess());
+            const [board, setBoard] = useState(gameRef.current.board());
+            const [legalMoves, setLegalMoves] = useState([]);
+            const [selectedSquare, setSelectedSquare] = useState(null);
+            const [gameOverMsg, setGameOverMsg] = useState('');
+
+            const files = ['a','b','c','d','e','f','g','h'];
+            const icons = {'r': '♜', 'n': '♞', 'b': '♝', 'q': '♛', 'k': '♚', 'p': '♟'};
+
+            useEffect(() => {
+                chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+            }, [chatMessages]);
+
+            const checkGameOver = () => {
+                const game = gameRef.current;
+                if(game.in_checkmate()) {
+                    const winner = game.turn() === 'w' ? 'BLACK' : 'WHITE';
+                    setGameOverMsg(`${winner} WINS BY CHECKMATE!`);
+                    setGameState('gameover');
+                } else if(game.in_draw()) {
+                    setGameOverMsg('DRAW!');
+                    setGameState('gameover');
+                }
+            };
+
+            const setupConnection = (conn) => {
+                connRef.current = conn;
+                conn.on('data', (data) => {
+                    if (data.type === 'INIT') {
+                        setOpponentName(data.name);
+                        setGameState('playing');
+                    } else if (data.type === 'MOVE') {
+                        gameRef.current.move(data.move);
+                        setBoard(gameRef.current.board());
+                        checkGameOver();
+                    } else if (data.type === 'CHAT') {
+                        setChatMessages(prev => [...prev, { sender: data.sender, text: data.text }]);
+                    }
+                });
+                
+                conn.on('close', () => {
+                    alert('Opponent disconnected.');
+                    window.location.reload();
+                });
+            };
+
+            const hostGame = (e) => {
+                e.preventDefault();
+                if(!playerName) return alert("Please enter your name first!");
+                
+                const code = 'MEEK-' + Math.floor(1000 + Math.random() * 9000);
+                setMyCode(code);
+                setRole('white');
+                
+                const peer = new Peer(code);
+                peerRef.current = peer;
+
+                peer.on('open', () => setGameState('waiting'));
+
+                peer.on('connection', (conn) => {
+                    setupConnection(conn);
+                    conn.on('open', () => conn.send({ type: 'INIT', name: playerName }));
+                });
+            };
+
+            const joinGame = (e) => {
+                e.preventDefault();
+                if(!playerName) return alert("Please enter your name first!");
+                if(!inputRoomCode) return alert("Please enter a room code to join!");
+                
+                setRole('black');
+                
+                const peer = new Peer();
+                peerRef.current = peer;
+
+                peer.on('open', () => {
+                    const conn = peer.connect(inputRoomCode.toUpperCase());
+                    setupConnection(conn);
+                    
+                    conn.on('open', () => {
+                        conn.send({ type: 'INIT', name: playerName });
+                    });
+                });
+                
+                peer.on('error', (err) => {
+                    alert("Room not found. Check the code and try again.");
+                });
+            };
+
+            const handleSquareClick = (rIndex, cIndex) => {
+                if (gameState !== 'playing') return;
+                const game = gameRef.current;
+                
+                // Networking safeguard: Enforce turn taking based on host/join role
+                if (game.turn() === 'w' && role !== 'white') return;
+                if (game.turn() === 'b' && role !== 'black') return;
+                
+                const sq = files[cIndex] + (8 - rIndex);
+                const piece = game.get(sq);
+                
+                // Attempt to move
+                const moveAttempt = legalMoves.find(m => m.to === sq);
+                if (moveAttempt) {
+                    let moveSan = moveAttempt.san;
+                    if (moveAttempt.flags.includes('p') && !moveSan.includes('=')) moveSan += '=Q'; // Auto queen promote
+                    
+                    game.move(moveSan);
+                    setSelectedSquare(null);
+                    setLegalMoves([]);
+                    setBoard(game.board());
+                    
+                    // Transmit to peer
+                    if(connRef.current) connRef.current.send({ type: 'MOVE', move: moveSan });
+                    
+                    checkGameOver();
+                    return;
+                }
+
+                if(piece && piece.color === game.turn()) {
+                    if (selectedSquare === sq) {
+                        setSelectedSquare(null);
+                        setLegalMoves([]);
+                    } else {
+                        setSelectedSquare(sq);
+                        setLegalMoves(game.moves({ square: sq, verbose: true }));
+                    }
+                } else {
+                    setSelectedSquare(null);
+                    setLegalMoves([]);
+                }
+            };
+
+            const sendChatMessage = (e) => {
+                e.preventDefault();
+                if(!currentMessage.trim() || !connRef.current) return;
+                const msgObj = { sender: playerName, text: currentMessage.trim() };
+                setChatMessages(prev => [...prev, msgObj]);
+                connRef.current.send({ type: 'CHAT', sender: playerName, text: currentMessage.trim() });
+                setCurrentMessage('');
+            };
+
+            const resignMatch = () => {
+                if(connRef.current) connRef.current.close();
+                window.location.reload();
+            };
+
+            // 1. Setup Lobby
+            if (gameState === 'setup') {
+                return (
+                    <div className="min-h-screen flex items-center justify-center fade-enter p-4">
+                        <div className="glass-panel p-10 rounded-[2rem] shadow-[0_0_50px_rgba(0,0,0,0.5)] w-full max-w-xl relative overflow-hidden text-center z-10 border-t border-white/20">
+                            <div className="absolute top-0 right-0 w-40 h-40 bg-brand-accent/30 rounded-full blur-[50px] pointer-events-none"></div>
+                            <div className="absolute bottom-0 left-0 w-40 h-40 bg-brand-primary/30 rounded-full blur-[50px] pointer-events-none"></div>
+                            
+                            <div className="relative z-10 mb-8 mt-6">
+                                <div className="w-28 h-28 mx-auto mb-6 rounded-3xl bg-gradient-to-br from-brand-primary via-purple-600 to-brand-accent flex items-center justify-center shadow-[0_0_40px_rgba(244,114,182,0.6)] border-[4px] border-white/20 transform transition-all duration-300 hover:scale-105 hover:rotate-3 cursor-pointer">
+                                    <span className="text-6xl font-black text-white tracking-tighter drop-shadow-[0_4px_10px_rgba(0,0,0,0.5)] leading-none mt-1">MU</span>
+                                </div>
+                                <h1 className="text-4xl sm:text-5xl font-extrabold tracking-tight text-white mb-2">Meeksozan Checkmate</h1>
+                                <p className="text-gray-300 font-light">Enter your name and create or join a room.</p>
+                            </div>
+                            
+                            <div className="space-y-6 relative z-10 text-left">
+                                <div>
+                                    <label className="block text-xs font-bold text-gray-400 mb-2 uppercase tracking-widest pl-1">Your Name</label>
+                                    <input 
+                                        type="text" 
+                                        value={playerName} 
+                                        onChange={e => setPlayerName(e.target.value)}
+                                        className="w-full px-5 py-4 bg-black/40 rounded-xl border border-white/10 focus:outline-none focus:border-brand-primary text-white font-medium transition-colors"
+                                        placeholder="e.g. Kasparov"
+                                    />
+                                </div>
+                                
+                                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-4 border-t border-white/10">
+                                    <button onClick={hostGame} className="cursor-pointer h-full bg-gradient-to-br from-brand-primary to-purple-700 hover:from-brand-primaryHover hover:to-brand-primary text-white font-bold py-4 rounded-xl shadow-lg transition-transform hover:-translate-y-1 tracking-wide uppercase">
+                                        Create Room
+                                        <span className="block text-xs font-light text-white/70 mt-1 capitalize normal-case">(Play as White)</span>
+                                    </button>
+                                    
+                                    <div className="flex flex-col gap-3">
+                                        <input 
+                                            type="text" 
+                                            value={inputRoomCode} 
+                                            onChange={e => setInputRoomCode(e.target.value)}
+                                            className="w-full px-4 py-3 bg-black/40 rounded-xl border border-white/10 focus:outline-none focus:border-brand-accent text-white font-bold tracking-widest text-center transition-colors uppercase"
+                                            placeholder="ROOM CODE"
+                                        />
+                                        <button onClick={joinGame} className="cursor-pointer bg-gradient-to-br from-brand-accent to-pink-700 hover:from-pink-400 hover:to-brand-accent text-white font-bold py-3 rounded-xl shadow-lg transition-transform hover:-translate-y-1 tracking-wide uppercase">
+                                            Join Room
+                                            <span className="block text-xs font-light text-white/70 mt-1 capitalize normal-case">(Play as Black)</span>
+                                        </button>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                );
+            }
+
+            // 2. Waiting Room (Host Only)
+            if (gameState === 'waiting') {
+                return (
+                    <div className="min-h-screen flex items-center justify-center fade-enter p-4">
+                        <div className="glass-panel p-10 rounded-[2rem] shadow-[0_0_50px_rgba(0,0,0,0.5)] text-center max-w-md w-full border-t border-brand-primary/50 relative overflow-hidden">
+                            <i className="ph-bold ph-spinner-gap animate-spin text-7xl text-brand-primary mb-6 block mx-auto"></i>
+                            <h2 className="text-2xl font-extrabold text-white mb-2">Waiting for Player 2...</h2>
+                            <p className="text-gray-400 mb-8 font-light">Send this access code to your opponent:</p>
+                            <div className="bg-black/80 px-8 py-5 rounded-2xl border-2 border-brand-primary/50 text-4xl sm:text-5xl font-extrabold tracking-[0.2em] text-brand-primary shadow-[0_0_20px_rgba(192,132,252,0.3)_inset] select-all cursor-pointer hover:bg-black transition-colors" title="Double click to select">
+                                {myCode}
+                            </div>
+                            <button onClick={resignMatch} className="mt-8 text-sm text-gray-400 hover:text-white transition-colors cursor-pointer">Cancel Match</button>
+                        </div>
+                    </div>
+                );
+            }
+
+            // 3. Match Playing Area
+            
+            // Layout Logic:
+            // White plays bottom, Black plays top.
+            const TopPlayer = role === 'white' ? { name: opponentName, team: 'Black', initial: opponentName.charAt(0).toUpperCase() } : { name: opponentName, team: 'White', initial: opponentName.charAt(0).toUpperCase() };
+            const BottomPlayer = role === 'white' ? { name: playerName, team: 'White', initial: playerName.charAt(0).toUpperCase() } : { name: playerName, team: 'Black', initial: playerName.charAt(0).toUpperCase() };
+            
+            // We use standard CSS flipping entirely decoupled from logic! 
+            // If the user's role is Black, we visually flip the entire board container 180deg, 
+            // and structurally flip each block 180deg back upwards so the pieces render normally.
+            const flipClass = role === 'black' ? 'rotate-180' : '';
+
+            return (
+                <div className="min-h-screen flex flex-col items-center justify-center p-4 fade-enter overflow-y-auto">
+                    <div className="w-full max-w-[min(95vw,75vh)] lg:max-w-[700px] flex flex-col gap-4 sm:gap-6 relative z-10 my-8">
+                        
+                        {/* Game Over Modal */}
+                        {gameState === 'gameover' && (
+                            <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-md rounded-[2.5rem] fade-enter border border-white/10">
+                                <div className="text-center p-10 glass-panel rounded-3xl border border-brand-primary shadow-[0_0_50px_rgba(192,132,252,0.5)] transform scale-110">
+                                    <i className="ph-fill ph-trophy text-7xl text-brand-primary mb-6 drop-shadow-xl inline-block -mt-4"></i>
+                                    <h3 className="text-3xl font-extrabold text-white mb-8 px-4">{gameOverMsg}</h3>
+                                    <button onClick={resignMatch} className="cursor-pointer px-8 py-3.5 bg-brand-primary hover:bg-brand-primaryHover text-white font-bold tracking-wide rounded-xl shadow-lg transition">Return to Lobby</button>
+                                </div>
+                            </div>
+                        )}
+
+                        {/* Top Player Profile */}
+                        <div className={`glass-panel p-5 rounded-2xl flex items-center justify-between transition-all duration-300 border backdrop-blur-xl opacity-70 bg-black/20 border-white/5`}>
+                            <div className="flex items-center gap-4">
+                                <div className="w-12 h-12 bg-black flex items-center justify-center rounded-xl text-white font-extrabold text-2xl shadow-inner border border-white/5">{TopPlayer.initial}</div>
+                                <div className="flex flex-col">
+                                    <h2 className="font-bold text-xl leading-tight text-white mb-0.5">{TopPlayer.name}</h2>
+                                    <span className="text-[10px] text-gray-400 uppercase tracking-[0.2em] font-bold">{TopPlayer.team} Team</span>
+                                </div>
+                            </div>
+                            <div className="text-xs text-brand-primary uppercase font-bold tracking-widest bg-brand-primary/10 px-3 py-1 rounded">
+                                {TopPlayer.team === 'Black' ? (gameRef.current?.turn() === 'b' ? 'Active' : 'Waiting') : (gameRef.current?.turn() === 'w' ? 'Active' : 'Waiting')}
+                            </div>
+                        </div>
+
+                        {/* Interactive Board Engine */}
+                        <div className="glass-panel p-6 sm:p-8 rounded-[2.5rem] shadow-[0_0_40px_rgba(255,255,255,0.1)] border border-white/20">
+                            <div className={`grid grid-cols-8 grid-rows-8 w-[min(95vw,75vh)] h-[min(95vw,75vh)] rounded-xl overflow-hidden border-[4px] border-white shadow-[0_0_30px_rgba(255,255,255,0.4)] select-none relative mx-auto ${flipClass}`}>
+                                {board.map((row, rIndex) => (
+                                    row.map((pieceObj, cIndex) => {
+                                        const sq = files[cIndex] + (8 - rIndex);
+                                        const isDark = (rIndex + cIndex) % 2 !== 0;
+                                        const isSelected = selectedSquare === sq;
+                                        
+                                        let bgClass = isDark ? 'board-square-dark cursor-pointer' : 'board-square-light cursor-pointer';
+                                        if(isSelected) bgClass = 'bg-brand-primary/80 cursor-pointer shadow-[0_0_20px_rgba(192,132,252,0.8)_inset]';
+                                        
+                                        return (
+                                            <div 
+                                                key={sq}
+                                                onClick={() => handleSquareClick(rIndex, cIndex)}
+                                                className={`relative flex items-center justify-center w-full h-full transition-all ${bgClass} ${flipClass}`}
+                                            >
+                                                {/* Local turn hover hints & selection highlights */}
+                                                {(isSelected || selectedSquare === sq) && <div className="absolute inset-0 bg-brand-primary/20 pointer-events-none"></div>}
+
+                                                {pieceObj && (
+                                                    <span 
+                                                        className="chess-piece text-[clamp(2.5rem,8vmin,5rem)] px-[2px] leading-[0.8] z-10 drop-shadow-2xl transition-transform hover:scale-105" 
+                                                        style={{color: pieceObj.color === 'w' ? '#ffffff' : '#f472b6'}}
+                                                    >
+                                                        {icons[pieceObj.type]}
+                                                    </span>
+                                                )}
+                                                
+                                                {cIndex === 0 && <span className={`absolute top-0.5 sm:top-1 left-1 sm:left-1.5 text-[10px] sm:text-[13px] font-extrabold z-0 drop-shadow-md ${isDark ? 'text-white/90' : 'text-brand-accent'}`}>{8 - rIndex}</span>}
+                                                {rIndex === 7 && <span className={`absolute bottom-0 sm:bottom-0.5 right-1 sm:right-1.5 text-[10px] sm:text-[13px] font-extrabold z-0 drop-shadow-md ${isDark ? 'text-white/90' : 'text-brand-accent'}`}>{files[cIndex]}</span>}
+                                            </div>
+                                        )
+                                    })
+                                ))}
+                            </div>
+                            
+                            {/* Networking & Turn Match Controls */}
+                            <div className="mt-8 flex justify-between items-center px-2">
+                                <button 
+                                    onClick={resignMatch} 
+                                    className="cursor-pointer px-5 py-3 bg-red-500/10 hover:bg-red-500/30 text-red-400 text-sm font-semibold rounded-xl transition-colors border border-red-500/20 flex items-center gap-2"
+                                >
+                                    <i className="ph-bold ph-warning-circle"></i> Disconnect
+                                </button>
+                                
+                                <div className={`text-sm sm:text-base font-extrabold uppercase tracking-widest px-4 sm:px-6 py-2.5 rounded-xl border-2 transition-all ${(gameRef.current?.turn() === 'w' && role === 'white') || (gameRef.current?.turn() === 'b' && role === 'black') ? 'text-green-400 border-green-500/50 bg-green-500/10 shadow-[0_0_15px_rgba(74,222,128,0.3)] animate-pulse' : 'text-gray-500 border-gray-600/50 bg-black/30'}`}>
+                                    {(gameRef.current?.turn() === 'w' && role === 'white') || (gameRef.current?.turn() === 'b' && role === 'black') ? 'YOUR TURN' : "OPPONENT'S TURN"}
+                                </div>
+                            </div>
+                        </div>
+
+                        {/* Bottom Player Profile */}
+                        <div className={`glass-panel p-5 rounded-2xl flex items-center justify-between transition-all duration-300 border backdrop-blur-xl ${((gameRef.current?.turn() === 'w' && role === 'white') || (gameRef.current?.turn() === 'b' && role === 'black')) ? 'border-brand-primary shadow-[0_0_30px_rgba(192,132,252,0.3)] bg-white/10' : 'border-white/5 opacity-70 bg-black/20'}`}>
+                            <div className="flex items-center gap-4">
+                                <div className="w-12 h-12 bg-white flex items-center justify-center rounded-xl text-brand-primary font-extrabold text-2xl shadow-inner border border-white/5">{BottomPlayer.initial}</div>
+                                <div className="flex flex-col">
+                                    <h2 className="font-bold text-xl leading-tight text-white mb-0.5">{BottomPlayer.name} <span className="text-sm font-normal text-gray-400 opacity-70 ml-2">(You)</span></h2>
+                                    <span className="text-[10px] text-brand-primary uppercase tracking-[0.2em] font-bold">{BottomPlayer.team} Team</span>
+                                </div>
+                            </div>
+                        </div>
+
+                        {/* Chatbox Panel */}
+                        {gameState === 'playing' && (
+                            <div className="glass-panel p-5 rounded-[2rem] flex flex-col border border-white/10 mt-2 shadow-[0_0_40px_rgba(0,0,0,0.4)]">
+                                <div className="flex items-center justify-between mb-4 border-b border-white/5 pb-3 px-2">
+                                    <h3 className="font-bold text-white flex items-center gap-2"><i className="ph-fill ph-chat-circle-text text-brand-primary text-2xl"></i> Live Chat</h3>
+                                    <span className="text-[10px] text-brand-accent uppercase font-bold tracking-[0.2em] px-3 py-1.5 bg-brand-accent/10 rounded-lg border border-brand-accent/20">Secure P2P Channel</span>
+                                </div>
+                                <div className="flex-1 h-[14rem] overflow-y-auto space-y-4 mb-4 pr-3 pl-1">
+                                    {chatMessages.length === 0 && <p className="text-xs text-gray-500 text-center italic mt-10">Waiting for incoming transmission... SAY HELLO!</p>}
+                                    {chatMessages.map((msg, i) => (
+                                        <div key={i} className={`flex flex-col ${msg.sender === playerName ? 'items-end' : 'items-start'}`}>
+                                            <span className={`text-[10px] uppercase font-bold tracking-widest mb-1 px-1 ${msg.sender === playerName ? 'text-brand-primary' : 'text-gray-400'}`}>{msg.sender}</span>
+                                            <div className={`px-5 py-3 rounded-[1.2rem] text-[14px] max-w-[85%] leading-relaxed ${msg.sender === playerName ? 'bg-gradient-to-r from-brand-primary to-purple-600 text-white rounded-br-sm shadow-[0_5px_20px_rgba(192,132,252,0.4)]' : 'bg-white/10 text-gray-100 border border-white/10 rounded-bl-sm backdrop-blur-md'}`}>
+                                                {msg.text}
+                                            </div>
+                                        </div>
+                                    ))}
+                                    <div ref={chatEndRef} className="h-1 text-transparent">.</div>
+                                </div>
+                                <div className="flex gap-1.5 mb-2.5 px-2 overflow-x-auto pb-1">
+                                    {['😀', '😂', '😎', '🤔', '😡', '👍', '🤯', '💀'].map((emo, idx) => (
+                                        <button 
+                                            key={idx} 
+                                            onClick={(e) => { e.preventDefault(); setCurrentMessage(prev => prev + emo); }}
+                                            className="cursor-pointer text-[1.35rem] hover:bg-white/10 rounded-lg px-2 py-1 transition-all hover:scale-[1.3] hover:rotate-6 flex-shrink-0"
+                                        >
+                                            {emo}
+                                        </button>
+                                    ))}
+                                </div>
+                                <form onSubmit={sendChatMessage} className="flex gap-3 px-1">
+                                    <input 
+                                        type="text" 
+                                        value={currentMessage}
+                                        onChange={e => setCurrentMessage(e.target.value)}
+                                        placeholder="Transmit message..." 
+                                        className="flex-1 bg-black/50 border border-white/10 rounded-xl px-5 py-4 text-sm text-white font-medium focus:outline-none focus:border-brand-primary transition-colors hover:bg-black/70"
+                                    />
+                                    <button type="submit" className="bg-brand-primary hover:bg-brand-primaryHover text-white px-6 rounded-xl font-bold transition-all shadow-[0_5px_20px_rgba(192,132,252,0.4)] transform hover:-translate-y-1"><i className="ph-bold ph-paper-plane-right text-xl"></i></button>
+                                </form>
+                            </div>
+                        )}
+
+                    </div>
+                </div>
+            );
+        };
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<OnlineChess />);
+    </script>
+</body>
+</html>
